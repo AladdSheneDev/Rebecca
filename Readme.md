@@ -10,7 +10,11 @@ By even looking at the repository, you agree to the following terms of use:
 1. **Attribution:** You may not present Rebecca as your own creation. Proper credit must be given to the original author.  
 2. **Non-commercial use:** Rebecca may **not** be used for commercial purposes.  
 3. **Modifications:** You may modify Rebecca and its files; however, all edits must be contributed back to the original Rebecca repository.  
-4. **System prompt restrictions:** You may **not** modify the system prompt, except for changes related to specific functional modules (e.g., click system, YOLO integration, memory management, etc.).  
+4. **System prompt restrictions:** You may **not** modify the system prompt, except for changes related to specific functional modules (e.g., click system, YOLO integration, memory management, etc.).
+
+##IMPORTANT:
+1. I did not include the Yolo vision weights, so you have to download them manually.
+2. I did not include the Model file, you can get it here https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF download the Q5_K_S
 
 ---
 
@@ -18,3 +22,4 @@ By even looking at the repository, you agree to the following terms of use:
 
 This project is licensed under the **Apache License 2.0**.  
 See the [LICENSE](LICENSE) file for details.  
+
