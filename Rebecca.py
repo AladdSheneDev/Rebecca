@@ -327,7 +327,7 @@ def get_tts():
     if _tts is None:
         try:
             # Load Piper voice model, (broke so thats why I used this instead of ElevenLabs)
-            _tts = PiperVoice.load("voices/en_US-amy-medium.onnx")
+            _tts = PiperVoice.load("/home/AladdinUsesArchBtw/voices/en_US-amy-medium.onnx")
             print("[TTS] Piper voice loaded!")
         except Exception as e:
             print(f"[TTS] Failed to load Piper: {e}")
