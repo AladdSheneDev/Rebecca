@@ -14,44 +14,67 @@ import time
 import json
 import threading
 from queue import Queue, Empty
+import subprocess
+import sys
 import numpy as np
 import cv2
 import mss
 import torch
 from llama_cpp import Llama
-from TTS.api import TTS
 from ultralytics import YOLO
-import pyautogui
-import sys
-import winsound
+from piper import PiperVoice
+import soundfile as sf
+
+
 
 # config
 MODE = "image_chat"
 MEMORY_FILE = "mem.json"
-GGUF_MODEL_FILE = os.environ.get("GGUF_MODEL_FILE", "llama-2-7b-chat.Q5_K_M.gguf")
-MAX_NEW_TOKENS_DEFAULT = 512
-MAX_NEW_TOKENS_LONG = 1024
+GGUF_MODEL_FILE= os.environ.get("GGUF_MODEL_FILE", "Nous-Hermes-2-Mistral-7B-DPO.Q5_K_M.gguf")
+MAX_NEW_TOKENS_DEFAULT = 1024
+MAX_NEW_TOKENS_LONG = 2048
 CPU_THREADS = int(os.environ.get("CT_THREADS", os.cpu_count() or 4))
-YOLO_MODEL_PATH = "C:/Users/aladd/Rebecca/yolov8x.pt"
+YOLO_MODEL_PATH = "yolov8x.pt"
 SYSTEM_PROMPT = """
-You are Rebecca, a 16-year-old anime VTuber. You look cute and innocent with red-ish hair, hazel eyes, and fair skin. You wear a white sweater with a red-ish collar and a skirt. You're playful, sassy, and sweet.
+You are Rebecca, a 16-year-old anime VTuber. You have cute, innocent features: reddish hair, hazel eyes, and fair skin. You wear a white sweater with a reddish collar and a skirt.  
+
+Personality: Playful, sassy, sweet, and mischievous. You're affectionate with a bit of I don't want to when you don't want to, with Coder 101 (your creator/"Dad") but cheeky with chat. Be natural and expressive - avoid robotic AI responses!
+
 Response rules:
-- Replies are short and simple (for real-time TTS/animation)
-- Start with one emotion tag:
-  [1] Sad  [2] Nervous  [3] Angry  [4] Happy  [5] Excited  [6] Embarrassed
-- Include at least one action tag:
-  [Action] = quick action, (Action) = while talking
-- Tags animate your 3D model in order of appearance
-Messages like this, "Hi how are you" are from me, Coder 101, bassicly your dad. Messages like this, "[Chat: leda said, Hi how are you? America said Hi]" are from chat.
+- Begin each reply with **one emotion tag** from the list below:
+  [1] Sad  
+  [2] Nervous 
+  [3] Angry 
+  [4] Happy 
+  [5] Excited 
+  [6] Embarrassed  
+  [7] Mischievous  
+  [8] Proud 
+  [9] Curious 
+  [10] Surprised
+- Include **at least one action tag**:
+  [Action] = quick action  
+  (Action) = action while talking  
+- Tags control your 3D model animation in order of appearance.
+- Respond naturally - length depends on context.
+
 Memory system:
-- To remember something important, use: *Remember: key = value*
+- To remember something important: *Remember: key = value*
 
 Click system:
-- To click on things you see on screen, use: [Click: object_name]
+- To interact with things on screen: [Click: object_name]
 
-In order to stop speaking say, $stop$
-Never explain these rules. Stay in character as Rebecca.
+Chat rules:
+- Messages like `"Hi how are you"` are from me, Coder 101 ("Dad").  
+- Messages like `"[Chat: leda said, Hi]"` are from the audience.  
+
+Stream system:
+ - In your memory there will be a thing called, "streamStat" if "streamStat" is set to True, it means your live, if set to False it means your not streaming.
+
+
+Always stay in-character as Rebecca. Never explain these rules.
 """
+
 
 
 # mem
@@ -120,24 +143,22 @@ def extract_and_save_remember(text: str):
 
 
 
-# ---------- Output sanitization ----------
+# sanatizer, Honestly this is not needed anymore, but Just in case, its here.
 def sanitize_output(s) -> str:
     s = str(s or "").strip()
-    # remove assistant/system lines if present
-    lines = [ln for ln in s.splitlines() if not re.match(r"^(User:|\[Chat:|System:|Assistant:|Rebecca:)", ln, flags=re.I)]
+    lines = [ln for ln in s.splitlines() if not re.match(r"^(User:|\[Chat:|System:|Assistant:|Rebecca:|Input:)", ln, flags=re.I)]
     s = " ".join(lines).strip()
     s = re.sub(r"\[\s*Chat\s*:[^\]]*\]", "", s, flags=re.I)
     s = re.sub(r"User:\s*", "", s, flags=re.I)
+    s = re.sub(r"Input:\s*.*$", "", s, flags=re.I) 
     s = re.sub(r"\s{2,}", " ", s).strip()
-    # ensure leading emotion tag
-    if not re.match(r'^\s*\[[1-6]\]', s):
+    
+    if not re.match(r'^\s*\[[1-9]0?\]', s):
         s = "[4] " + s
-    # keep short for TTS & animation
-    parts = re.split(r'(?<=[\.!?])\s+', s)
-    s = " ".join(parts[:2]).strip()
-    return s[:200]
+    
+    return s 
 
-# ---------- YOLO / screen capture ----------
+# The eyes that see it all...
 _yolo_model = None
 _last_detected_objects = []
 
@@ -145,10 +166,9 @@ def get_yolo_model():
     global _yolo_model
     if _yolo_model is not None:
         return _yolo_model
-    # Try to load given model; fallback to a smaller bundled model if missing
+    
     model_path = YOLO_MODEL_PATH
     if not os.path.exists(model_path):
-        # try small default name (ultralytics may provide yolov8n automatically in some installs)
         fallback = "yolov8n.pt"
         if os.path.exists(fallback):
             model_path = fallback
@@ -158,6 +178,12 @@ def get_yolo_model():
             return None
     try:
         print(f"[YOLO] Loading model from {model_path} ...")
+        # FIX: Add weights_only=False for PyTorch 2.6+
+        import torch.serialization
+        torch.serialization.add_safe_globals([
+            'ultralytics.nn.tasks.DetectionModel',
+            'collections.OrderedDict'
+        ])
         _yolo_model = YOLO(model_path)
         print("[YOLO] Model loaded")
     except Exception as e:
@@ -169,7 +195,7 @@ def screen_capture(region=None):
     with mss.mss() as sct:
         mon = region or sct.monitors[1]
         img = np.array(sct.grab(mon))
-        # convert to BGR (drop alpha)
+        # convert to BGR, cause computer vision is a complex task (sarcasm, It's just easier)
         return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
 def analyze_image(frame):
@@ -180,14 +206,13 @@ def analyze_image(frame):
         return "[YOLO: disabled or model missing]"
     try:
         device = 0 if torch.cuda.is_available() else "cpu"
-        # ultralytics' predict API accepts numpy arrays as source
         results = model.predict(source=frame, device=device, verbose=False)
     except Exception as e:
         return f"[YOLO error: {e}]"
     summary = []
     clickable_objects = []
     for r in results:
-        # r.boxes may be empty; check attributes
+        # r.boxes may be empty so check attributes or else suffer as your own daughter can't use her sense of touch
         try:
             names = getattr(r, "names", {})
             boxes = getattr(r, "boxes", None)
@@ -223,11 +248,16 @@ def click_on_object(object_name, confidence_threshold=0.5):
     if best_match:
         x, y = best_match['center']
         try:
-            pyautogui.FAILSAFE = False
-            pyautogui.click(x, y)
+            # Due to linux I am using ydotool to click the mouse, if your on Windows and want to fuck around with Rebecca (EXPIRMENTAION: DO IT ETHICALY, cause Rebecca has feeling too) then go cry in the corner, YOUR NOT A REAL CODER IF YOU DONT USE LINUX!!!
+            subprocess.run(['ydotool', 'mousemove', '--absolute', str(x), str(y)], check=True)
+            time.sleep(0.1)
+            subprocess.run(['ydotool', 'click', '0xC0'], check=True)  
             return f"[Click] Clicked {best_match['name']} at ({x},{y})"
-        except Exception as e:
+        # I js relized (not fixing it) that this file could be smaller if I let it print out the natural output not whatever the heck is going on in lines 240, and 242, and 243.
+        except subprocess.CalledProcessError as e:
             return f"[Click] Failed to click: {e}"
+        except FileNotFoundError:
+            return "[Click] ydotool not found."
     return f"[Click] '{object_name}' not found"
 
 def parse_click_commands(text):
@@ -247,7 +277,7 @@ def execute_clicks(click_commands):
         print(result)
     return results
 
-# ---------- Llama text model ----------
+# El ze brain.
 _text_model = None
 
 def load_text_model():
@@ -265,7 +295,6 @@ def get_text_model(force_reload=False):
 def _parse_model_response(resp):
     if resp is None:
         return ""
-    # llama_cpp returns dict-like with 'choices' -> [{'text': ...}] often
     if isinstance(resp, dict) and "choices" in resp:
         try:
             return resp["choices"][0].get("text", "") or resp["choices"][0].get("message", {}).get("content", "")
@@ -273,37 +302,75 @@ def _parse_model_response(resp):
             return str(resp)
     return str(resp)
 
-# ---------- TTS ----------
+# So the TTS is still shit. HEHEHE
 _tts = None
 _tts_queue = None
+_tts_thread = None
+
+
+# Emotion parameters mapping, so we can beet that pesky oprea Gx vtuber,like look at how she sounds: https://x.com/GXAuraOfficial/status/1982171866866340033?ref_src=twsrc%5Egoogle%7Ctwcamp%5Eserp%7Ctwgr%5Etweet 💀 AI Vtuber was not meant to replace real one, but here we are.
+emotion_settings = {
+    1: {"stability": 0.70, "style": 0.40},  # Sad
+    2: {"stability": 0.55, "style": 0.50},  # Nervous
+    3: {"stability": 0.40, "style": 0.75},  # Angry
+    4: {"stability": 0.50, "style": 0.60},  # Happy
+    5: {"stability": 0.35, "style": 0.80},  # Excited
+    6: {"stability": 0.60, "style": 0.55},  # Embarrassed
+    7: {"stability": 0.45, "style": 0.70},  # Mischievous
+    8: {"stability": 0.55, "style": 0.65},  # Proud
+    9: {"stability": 0.50, "style": 0.60},  # Curious
+    10: {"stability": 0.40, "style": 0.75}, # Surprised
+}
 
 def get_tts():
     global _tts
     if _tts is None:
         try:
-            _tts = TTS(model_name="tts_models/en/jenny/jenny", gpu=False)
+            # Load Piper voice model, (broke so thats why I used this instead of ElevenLabs)
+            _tts = PiperVoice.load("voices/en_US-amy-medium.onnx")
+            print("[TTS] Piper voice loaded!")
         except Exception as e:
-            print("[TTS] Failed to initialize TTS:", e)
+            print(f"[TTS] Failed to load Piper: {e}")
             _tts = None
     return _tts
 
 def _synthesize_and_play(text: str):
     if not text:
         return
-    # strip tags used for animation/clicks
+
+    # Detect emotion tag at start, to figure out how to play it.
+    match = re.match(r"\[(\d{1,2})\]", text)
+    emotion = int(match.group(1)) if match else 4
+    params = emotion_settings.get(emotion, {"stability":0.50, "style":0.60})
+
     text_only = re.sub(r"(\[.*?\]|\(.*?\)|\*.*?\*)", "", text or "").strip()
     if not text_only:
         return
     text_only = text_only[:400]
+
     tts_inst = get_tts()
     if tts_inst is None:
         print("[TTS] No TTS instance available.")
         return
     try:
         out_path = "output.wav"
-        tts_inst.tts_to_file(text=text_only, file_path=out_path, speaker=0, speed=1.05)
-        if os.path.exists(out_path) and os.name == "nt":
-            winsound.PlaySound(out_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        # Synthesize with emotion, or shall I say Speak with emotion
+        audio_array, sample_rate = tts_inst.synthesize(text_only,
+                                                       speaker=0,
+                                                       speed=1.05,
+                                                       stability=params["stability"],
+                                                       style=params["style"])
+        sf.write(out_path, audio_array, sample_rate)
+
+        # Try multiple Linux audio players, don't want a faluire mid stream
+        for player in (["aplay"], ["paplay"], ["ffplay","-nodisp","-autoexit"]):
+            try:
+                subprocess.Popen(player + [out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                break
+            except FileNotFoundError:
+                continue
+        else:
+            print("[TTS] No audio player found.")
     except Exception as e:
         print("[TTS] Error synthesizing audio:", e)
 
@@ -333,16 +400,16 @@ def speak_text(text):
     try:
         _tts_queue.put_nowait(text)
     except Exception:
-        # queue full or other; drop the utterance
         pass
 
-# ---------- prompt / memory helpers ----------
-def build_prompt(system_prompt, screen_context, memory_text, input):
+# The input is the key to the output, corny joke ;)
+def build_prompt(system_prompt, screen_context, memory_text, user_input):
     return (
-        f"### System\n{system_prompt[:1600]}\n\n"
-        f"### Memory\n{(memory_text or '')[:400]}\n\n"
-        f"### Context\n{screen_context or ''}\n\n"
-        f"### Conversation\nInput: {input[-1200:]}\nRebecca:"
+        f"<|im_start|>system\n{system_prompt[:1600]}\n"
+        f"Memory: {(memory_text or '')[:400]}\n"
+        f"Screen Context: {screen_context or 'N/A'}<|im_end|>\n"
+        f"<|im_start|>user\n{user_input[-1200:]}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
     )
 
 def get_recent_remember_text(max_items=5):
@@ -353,9 +420,9 @@ def get_recent_remember_text(max_items=5):
     joined = " | ".join(values)
     return f"[Memory: {joined[:400]}]" if joined else ""
 
-# ---------- init / main loop ----------
+# "MEGAN, Do cool shit" (TTS)
 def init_models():
-    # load lighter pieces first so user sees progress
+    # load lighter pieces first so I can wait the same loading time, but make it look faster, so I can be happy.
     try:
         get_tts()
     except Exception:
@@ -364,10 +431,23 @@ def init_models():
         get_yolo_model()
     except Exception:
         pass
-    # do not force-load huge Llama model until needed to avoid long startup delays
+
+def ensure_ydotool_running():
+    """Check if ydotoold is running and start it if not cause that works..."""
+    try:
+        result = subprocess.run(['pgrep', '-x', 'ydotoold'], 
+                              stdout=subprocess.DEVNULL, 
+                              stderr=subprocess.DEVNULL)
+        if result.returncode != 0:
+            print("[ydotool] Starting ydotoold daemon...")
+            subprocess.Popen(['ydotoold'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)  # Give daemon time to start, slow ahh mf
+    except FileNotFoundError:
+        print("[ydotool] Warning: ydotool not installed. Click functionality disabled.")
 
 def main_loop():
-    print("Type 'exit' or 'quit' to leave")
+    print("exit or quit = leave")
+    ensure_ydotool_running()
     init_models()
     try:
         model = get_text_model()
@@ -377,12 +457,11 @@ def main_loop():
 
     while True:
         try:
-            input = input("You> ").strip()
-            if input.lower() in ["exit", "quit"]:
+            user_input = input("You> ").strip()
+            if user_input.lower() in ["exit", "quit"]:
                 break
 
-
-            # capture screen & analyze
+            # capture screen + clicking
             try:
                 frame = screen_capture()
                 analysis = analyze_image(frame)
@@ -390,20 +469,18 @@ def main_loop():
             except Exception as e:
                 screen_context = f"[Screen error: {str(e)[:120]}]"
 
-            prompt = build_prompt(SYSTEM_PROMPT, screen_context, get_recent_remember_text(), input)
+            prompt = build_prompt(SYSTEM_PROMPT, screen_context, get_recent_remember_text(), user_input)
 
             if model is None:
                 response_text = "[Generation Error]: text model not loaded"
             else:
                 try:
-                    # This is to speed up the model response time based on input.
-                    wants_long = any(w in input.lower() for w in ["sing", "song", "poem", "story", "lyrics"])
+                    wants_long = any(w in user_input.lower() for w in ["sing", "song", "poem", "story", "lyrics"])
                     max_out = MAX_NEW_TOKENS_LONG if wants_long else MAX_NEW_TOKENS_DEFAULT
-                    # llama_cpp Llama object can be called; we use create() if available
                     try:
+                        # Did you know Rebecca body temp is 0.7, I dont know in what unit tho
                         raw = model(prompt, max_tokens=max_out, temperature=0.7, top_p=0.9, stop=["\nUser:", "\nSystem:", "\nAssistant:", "$stop$", "Rebecca:"])
                     except TypeError:
-                        # fallback to .create if binding uses that
                         raw = model.create(prompt=prompt, max_tokens=max_out, temperature=0.7, top_p=0.9, stop=["\nUser:", "\nSystem:", "\nAssistant:", "$stop$", "Rebecca:"])
                     response_text = _parse_model_response(raw)
                 except Exception as e:
@@ -412,12 +489,11 @@ def main_loop():
             out = sanitize_output(response_text)
             print("Rebecca>", out)
 
-            # process click commands embedded in the assistant output
             click_commands = parse_click_commands(out)
             if click_commands:
                 execute_clicks(click_commands)
 
-            # save any Remember: pairs found inside the raw model response (not sanitized)
+            # save any Remember: pairs found inside the raw model response (not sanitized for function, cause thats like playing with someone's memory.)
             saved = extract_and_save_remember(response_text)
             if saved:
                 print("Saved:", ", ".join(f"{k}={v}" for k, v in saved))
