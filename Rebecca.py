@@ -273,7 +273,7 @@ def screen_capture(region=None):
         print("[Screen] Capture timed out")
         raise Exception("Screen capture timeout")
     except FileNotFoundError:
-        print("[Screen] grim not found. Install with: sudo pacman -S grim")
+        print("[Screen] grim not found. ")
         raise Exception("grim not installed")
     except Exception as e:
         print(f"[Screen] Capture error: {e}")
