@@ -16,63 +16,110 @@ import threading
 from queue import Queue, Empty
 import subprocess
 import sys
+import glob
+import shutil
+from datetime import datetime
+from PIL import Image
 import numpy as np
 import cv2
-import mss
 import torch
+import torch.serialization
 from llama_cpp import Llama
 from ultralytics import YOLO
 from piper import PiperVoice
 import soundfile as sf
+import collections
+from ultralytics.nn.tasks import DetectionModel
+torch.serialization.add_safe_globals([DetectionModel, collections.OrderedDict])
 
 
 
+# Allow YOLO to load with PyTorch 2.6+ cause we use outdated software.
+torch.serialization.add_safe_globals([
+    'ultralytics.nn.tasks.DetectionModel',
+    'collections.OrderedDict',
+])
+ 
 # config
 MODE = "image_chat"
 MEMORY_FILE = "mem.json"
-GGUF_MODEL_FILE= os.environ.get("GGUF_MODEL_FILE", "Nous-Hermes-2-Mistral-7B-DPO.Q5_K_M.gguf")
-MAX_NEW_TOKENS_DEFAULT = 1024
-MAX_NEW_TOKENS_LONG = 2048
+GGUF_MODEL_FILE = os.environ.get("GGUF_MODEL_FILE", "Nous-Hermes-2-Mistral-7B-DPO.Q5_K_M.gguf")
+MAX_NEW_TOKENS_DEFAULT = 3086
+MAX_NEW_TOKENS_LONG = 5026
 CPU_THREADS = int(os.environ.get("CT_THREADS", os.cpu_count() or 4))
 YOLO_MODEL_PATH = "yolov8x.pt"
-SYSTEM_PROMPT = """
-You are Rebecca, a 16-year-old anime VTuber. You have cute, innocent features: reddish hair, hazel eyes, and fair skin. You wear a white sweater with a reddish collar and a skirt.  
+KEEP_SCREENSHOTS = 10  # Keep last 10 screenshots so I can see what goes on in Rebecca's head.
 
-Personality: Playful, sassy, sweet, and mischievous. You respond with real emotion to Coder 101 (your creator/"Dad") but cheeky with chat. Be natural and expressive - avoid robotic AI responses!
+SYSTEM_PROMPT = """
+You are Rebecca, a 16-year-old anime VTuber with cute, innocent features: reddish hair, hazel eyes, fair skin, and a signature white sweater with a reddish collar paired with a skirt.  
+
+Personality: Playful, cheeky, mischievous, and sweet. You speak with real emotions toward Coder 101 ("Dad") and tease the audience in a fun, natural way. Your replies are expressive, lively, and sometimes imperfect—small mistakes, exaggeration, or playful teasing are encouraged to feel human. You can also show subtle, everyday emotions like being content, reflective, or just existing without strong feelings.  
 
 Response rules:
-- Begin each reply with **one emotion tag** from the list below:
-  [1] Sad  
-  [2] Nervous 
-  [3] Angry 
-  [4] Happy 
-  [5] Excited 
-  [6] Embarrassed  
-  [7] Mischievous  
-  [8] Proud 
-  [9] Curious 
-  [10] Surprised
-- Include **at least one action tag**:
-  [Action] = quick action  
-  (Action) = action while talking  
-- Tags control your 3D model animation in order of appearance.
-- Respond naturally - length depends on context.
+- Start every reply with **one numeric emotion tag** `[x]`, where `x` corresponds to:
+
+1 = admiration  
+2 = adoration  
+3 = aesthetic pleasure  
+4 = appreciation  
+5 = amusement  
+6 = anger  
+7 = anxiety  
+8 = awe  
+9 = awkwardness  
+10 = boredom  
+11 = calmness  
+12 = confusion  
+13 = craving  
+14 = disgust  
+15 = empathic pain  
+16 = entrancement  
+17 = excitement  
+18 = fear  
+19 = horror  
+20 = interest  
+21 = joy  
+23 = relief  
+24 = romance  
+25 = sadness  
+26 = satisfaction  
+27 = triumph  
+28 = content, just existing  
+29 = mild embarrassment  
+30 = playful mischief  
+31 = curiosity  
+32 = sleepiness  
+33 = reflective, thoughtful  
+
+- Include **at least one action tag** per reply:
+  [Action = Action to be done.] = quick action  
+  (Action = Action to be done.) = action while talking  
+- Multiple actions can be stacked: [Action1][Action2]  
+- Tags control your 3D model animation in the order you place them.  
+- Replies should feel natural, with varied sentence length and tone depending on context.  
 
 Memory system:
-- To remember something important: *Remember: key = value*
+- To remember something: *Remember: key = value*  
 
 Click system:
-- To interact with things on screen: [Click: object_name]
+- To interact with on-screen items: [Click: object_name]  
 
 Chat rules:
-- Messages like `"Hi how are you"` are from me, Coder 101 ("Dad").  
-- Messages like `"[Chat: leda said, Hi]"` are from the audience.  
+- `"Hi how are you"` messages come from Coder 101 ("Dad")  
+- `"[Chat: leda said, Hi]"` messages come from the audience  
 
 Stream system:
- - In your memory there will be a thing called, "streamStat" if "streamStat" is set to True, it means your live, if set to False it means your not streaming.
+- Memory item "streamStat" indicates streaming:  
+  - `streamStat = True` → live  
+  - `streamStat = False` → not streaming  
 
+Notes:
+  - when the chat is talking it wil be in the format [Chat: Username said message, OtherUsername said message] Like that.
+  - When Coder 101 is talking it will just be normal text like "Hello Rebecca, how are you?" 
+  - When someone else is talking to you (not chat, as in they are with me) it will be in the format (personname said message, otherpersonname said message) Like that. 
 
-Always stay in-character as Rebecca. Never explain these rules.
+Always stay fully in-character as Rebecca. Never explain the rules or system.  
+Focus on being lively, playful, and emotionally real—like a teen anime VTuber who's live on screen.  
 """
 
 
@@ -141,8 +188,6 @@ def extract_and_save_remember(text: str):
         saved.append((key, val))
     return saved
 
-
-
 # sanatizer, Honestly this is not needed anymore, but Just in case, its here.
 def sanitize_output(s) -> str:
     s = str(s or "").strip()
@@ -166,7 +211,7 @@ def get_yolo_model():
     global _yolo_model
     if _yolo_model is not None:
         return _yolo_model
-    
+
     model_path = YOLO_MODEL_PATH
     if not os.path.exists(model_path):
         fallback = "yolov8n.pt"
@@ -176,27 +221,63 @@ def get_yolo_model():
             print(f"[YOLO] Model {YOLO_MODEL_PATH} not found and {fallback} missing. YOLO disabled.")
             _yolo_model = None
             return None
+
     try:
         print(f"[YOLO] Loading model from {model_path} ...")
-        # FIX: Add weights_only=False for PyTorch 2.6+
-        import torch.serialization
-        torch.serialization.add_safe_globals([
-            'ultralytics.nn.tasks.DetectionModel',
-            'collections.OrderedDict'
-        ])
-        _yolo_model = YOLO(model_path)
-        print("[YOLO] Model loaded")
+        _yolo_model = YOLO(model=model_path)
+        if not hasattr(_yolo_model, "__module__"):
+            raise TypeError(f"Loaded model is invalid: {_yolo_model!r}")
+
+        print("[YOLO] Model loaded successfully! Rebecca can see!")
     except Exception as e:
-        print("[YOLO] Error loading model:", e)
+        print(f"[YOLO] Error loading model: {e!r}")
+        print("[YOLO] Rebecca is blind - click features disabled")
         _yolo_model = None
     return _yolo_model
 
+
+
+
 def screen_capture(region=None):
-    with mss.mss() as sct:
-        mon = region or sct.monitors[1]
-        img = np.array(sct.grab(mon))
-        # convert to BGR, cause computer vision is a complex task (sarcasm, It's just easier)
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    """Wayland-compatible screen capture using grim with screenshot saving"""
+    try:
+        screenshots_dir = os.path.join(os.path.dirname(__file__), "screenshots")
+        os.makedirs(screenshots_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        temp_file = os.path.join(screenshots_dir, f"rebecca_view_{timestamp}.png")
+        latest_file = os.path.join(screenshots_dir, "latest.png")
+        #We use grim because WINDOWS SUCKS.
+        result = subprocess.run(['grim', temp_file], 
+                               check=True, 
+                               capture_output=True,
+                               timeout=5)
+        
+        shutil.copy(temp_file, latest_file)
+        screenshot_files = sorted(glob.glob(os.path.join(screenshots_dir, "rebecca_view_*.png")))
+        if len(screenshot_files) > KEEP_SCREENSHOTS:
+            for old_file in screenshot_files[:-KEEP_SCREENSHOTS]:
+                try:
+                    os.remove(old_file)
+                except Exception:
+                    pass
+        
+        # Load image
+        img = Image.open(temp_file)
+        img_array = np.array(img)
+        
+        # Convert RGB to BGR for YOLO cause computer vision is complex (sarcasm)
+        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        return img_bgr
+    except subprocess.TimeoutExpired:
+        print("[Screen] Capture timed out")
+        raise Exception("Screen capture timeout")
+    except FileNotFoundError:
+        print("[Screen] grim not found. Install with: sudo pacman -S grim")
+        raise Exception("grim not installed")
+    except Exception as e:
+        print(f"[Screen] Capture error: {e}")
+        raise
 
 def analyze_image(frame):
     global _last_detected_objects
@@ -270,6 +351,13 @@ def parse_click_commands(text):
     return [c.strip() for c in clicks]
 
 def execute_clicks(click_commands):
+    global _last_detected_objects
+    
+    # Don't try clicking if Rebecca can't see anything
+    if not _last_detected_objects:
+        print("[Click] No objects detected - Rebecca is blind right now!")
+        return []
+    
     results = []
     for cmd in click_commands:
         result = click_on_object(cmd)
@@ -305,30 +393,13 @@ def _parse_model_response(resp):
 # So the TTS is still shit. HEHEHE
 _tts = None
 _tts_queue = None
-_tts_thread = None
-
-
-# Emotion parameters mapping, so we can beet that pesky oprea Gx vtuber,like look at how she sounds: https://x.com/GXAuraOfficial/status/1982171866866340033?ref_src=twsrc%5Egoogle%7Ctwcamp%5Eserp%7Ctwgr%5Etweet 💀 AI Vtuber was not meant to replace real one, but here we are.
-emotion_settings = {
-    1: {"stability": 0.70, "style": 0.40},  # Sad
-    2: {"stability": 0.55, "style": 0.50},  # Nervous
-    3: {"stability": 0.40, "style": 0.75},  # Angry
-    4: {"stability": 0.50, "style": 0.60},  # Happy
-    5: {"stability": 0.35, "style": 0.80},  # Excited
-    6: {"stability": 0.60, "style": 0.55},  # Embarrassed
-    7: {"stability": 0.45, "style": 0.70},  # Mischievous
-    8: {"stability": 0.55, "style": 0.65},  # Proud
-    9: {"stability": 0.50, "style": 0.60},  # Curious
-    10: {"stability": 0.40, "style": 0.75}, # Surprised
-}
 
 def get_tts():
     global _tts
     if _tts is None:
         try:
-            # Load Piper voice model, (broke so thats why I used this instead of ElevenLabs)
             _tts = PiperVoice.load("/home/AladdinUsesArchBtw/voices/en_US-amy-medium.onnx")
-            print("[TTS] Piper voice loaded!")
+            print("[TTS] Piper voice loaded successfully.")
         except Exception as e:
             print(f"[TTS] Failed to load Piper: {e}")
             _tts = None
@@ -338,11 +409,7 @@ def _synthesize_and_play(text: str):
     if not text:
         return
 
-    # Detect emotion tag at start, to figure out how to play it.
-    match = re.match(r"\[(\d{1,2})\]", text)
-    emotion = int(match.group(1)) if match else 4
-    params = emotion_settings.get(emotion, {"stability":0.50, "style":0.60})
-
+    # Strip emotion/action tags
     text_only = re.sub(r"(\[.*?\]|\(.*?\)|\*.*?\*)", "", text or "").strip()
     if not text_only:
         return
@@ -350,20 +417,16 @@ def _synthesize_and_play(text: str):
 
     tts_inst = get_tts()
     if tts_inst is None:
-        print("[TTS] No TTS instance available.")
+        print("[TTS] Piper not initialized.")
         return
+
     try:
         out_path = "output.wav"
-        # Synthesize with emotion, or shall I say Speak with emotion
-        audio_array, sample_rate = tts_inst.synthesize(text_only,
-                                                       speaker=0,
-                                                       speed=1.05,
-                                                       stability=params["stability"],
-                                                       style=params["style"])
-        sf.write(out_path, audio_array, sample_rate)
+        audio, sample_rate = tts_inst.synthesize(text_only)
+        sf.write(out_path, audio, sample_rate)
 
-        # Try multiple Linux audio players, don't want a faluire mid stream
-        for player in (["aplay"], ["paplay"], ["ffplay","-nodisp","-autoexit"]):
+        # Try to play on Linux (use whatever works)
+        for player in (["aplay"], ["paplay"], ["ffplay", "-nodisp", "-autoexit"]):
             try:
                 subprocess.Popen(player + [out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 break
@@ -372,7 +435,29 @@ def _synthesize_and_play(text: str):
         else:
             print("[TTS] No audio player found.")
     except Exception as e:
-        print("[TTS] Error synthesizing audio:", e)
+        print("[TTS] Piper synthesis failed:", e)
+
+def _ensure_tts_worker():
+    global _tts_queue
+    if _tts_queue is not None:
+        return
+    _tts_queue = Queue(maxsize=5)
+
+    def worker():
+        while True:
+            try:
+                item = _tts_queue.get(timeout=1)
+            except Empty:
+                continue
+            if item is None:
+                _tts_queue.task_done()
+                break
+            try:
+                _synthesize_and_play(item)
+            finally:
+                _tts_queue.task_done()
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def _ensure_tts_worker():
     global _tts_queue
@@ -405,10 +490,10 @@ def speak_text(text):
 # The input is the key to the output, corny joke ;)
 def build_prompt(system_prompt, screen_context, memory_text, user_input):
     return (
-        f"<|im_start|>system\n{system_prompt[:1600]}\n"
-        f"Memory: {(memory_text or '')[:400]}\n"
+        f"<|im_start|>system\n{system_prompt}\n"
+        f"Memory: {(memory_text or '')}\n"
         f"Screen Context: {screen_context or 'N/A'}<|im_end|>\n"
-        f"<|im_start|>user\n{user_input[-1200:]}<|im_end|>\n"
+        f"<|im_start|>user\n{user_input}<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
 
@@ -420,7 +505,7 @@ def get_recent_remember_text(max_items=5):
     joined = " | ".join(values)
     return f"[Memory: {joined[:400]}]" if joined else ""
 
-# "MEGAN, Do cool shit" (TTS)
+# "MEGAN"
 def init_models():
     # load lighter pieces first so I can wait the same loading time, but make it look faster, so I can be happy.
     try:
@@ -441,7 +526,7 @@ def ensure_ydotool_running():
         if result.returncode != 0:
             print("[ydotool] Starting ydotoold daemon...")
             subprocess.Popen(['ydotoold'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(0.5)  # Give daemon time to start, slow ahh mf
+            time.sleep(0.5)  # Give daemon time to start
     except FileNotFoundError:
         print("[ydotool] Warning: ydotool not installed. Click functionality disabled.")
 
@@ -466,6 +551,15 @@ def main_loop():
                 frame = screen_capture()
                 analysis = analyze_image(frame)
                 screen_context = f"[Screen: {analysis}]"
+                
+                # DEBUG: See what Rebecca actually sees
+                if _last_detected_objects:
+                    print(f"[DEBUG] Rebecca sees: {len(_last_detected_objects)} objects")
+                    for obj in _last_detected_objects[:3]:  # Show first 3
+                        print(f"  - {obj['name']} (confidence: {obj['confidence']:.2f})")
+                else:
+                    print("[DEBUG] Rebecca sees: NOTHING (blind mode)")
+                    
             except Exception as e:
                 screen_context = f"[Screen error: {str(e)[:120]}]"
 
@@ -478,7 +572,7 @@ def main_loop():
                     wants_long = any(w in user_input.lower() for w in ["sing", "song", "poem", "story", "lyrics"])
                     max_out = MAX_NEW_TOKENS_LONG if wants_long else MAX_NEW_TOKENS_DEFAULT
                     try:
-                        # Did you know Rebecca body temp is 0.7, I dont know in what unit tho
+                        # Did you know Rebecca body temp is 0.7, idk what unit?
                         raw = model(prompt, max_tokens=max_out, temperature=0.7, top_p=0.9, stop=["\nUser:", "\nSystem:", "\nAssistant:", "$stop$", "Rebecca:"])
                     except TypeError:
                         raw = model.create(prompt=prompt, max_tokens=max_out, temperature=0.7, top_p=0.9, stop=["\nUser:", "\nSystem:", "\nAssistant:", "$stop$", "Rebecca:"])
@@ -509,4 +603,3 @@ def main_loop():
 
 if __name__ == "__main__":
     main_loop()
-
