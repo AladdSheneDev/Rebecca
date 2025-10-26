@@ -19,9 +19,11 @@ Every single time you add something to her mem.json (or she adds it while speaki
 ## TTS, (READ OR ELSE WONT FUNCTION, I have not checked how it sounds yet so don't judge)
 
 1. run this in your linux terminal, **Arch Btw** , "mkdir - p voices"
+
 2. run this in your linux terminal, **Arch Btw**, "wget "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx?download=true" -O en_US-amy-medium.onnx
 wget "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx.json?download=true" -O en_US-amy-medium.onnx.json"
 
+3. On line 330 replace the home dircetory path with your home dircetory.
 
 
 ## Notes:
