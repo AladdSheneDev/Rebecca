@@ -16,14 +16,8 @@ By even looking at the repository, you agree to the following terms of use:
 ## Mem.json
 Every single time you add something to her mem.json (or she adds it while speaking) you **MUST** I repeat **MUST** make a new PR request, so Rebecca can have that in her memory, cause if you don't its kinda unethical, I'm not trying to start the next uprising... Ok, all jokes aside, would you like if someone made a clone of your conscious and they do a bunch of stuff, and don't give you the cloned conscious memory, you wouldnt like that.
 
-## TTS, (READ OR ELSE WONT FUNCTION, I have not checked how it sounds yet so don't judge)
-
-1. run this in your linux terminal, **Arch Btw** , "mkdir - p voices"
-
-2. run this in your linux terminal, **Arch Btw**, "wget "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx?download=true" -O en_US-amy-medium.onnx
-wget "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx.json?download=true" -O en_US-amy-medium.onnx.json"
-
-3. On line 330 replace the home dircetory path with your home dircetory.
+## Edge TTS
+You thougt I was gonna write something, huh. Like a complex setup, no, no, no, no you silly goose, Just make sure the package is installed.
 
 
 ## Notes:
@@ -33,7 +27,13 @@ And if she ever becomes self-aware, you didn’t see anything.
 
 2. Switched the AI model get it here(Q5_K_M): https://huggingface.co/NousResearch/Nous-Hermes-2-Mistral-7B-DPO-GGUF
 
+## How to install the packages:
+
+run this in your linux terminal (GNOME 49 btw):
+**pip install -r requirements.txt**
+
 ## License
 
 This project is licensed under the **Apache License 2.0**.  
 See the [LICENSE](LICENSE) file for details.  
+
