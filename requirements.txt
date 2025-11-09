@@ -1,13 +1,19 @@
-### Python Packages (for 3.11.11):
-```bash
-pip install --upgrade \
-  numpy>=1.24.0 \
-  opencv-python>=4.8.0 \
-  mss>=9.0.0 \
-  torch>=2.0.0 \
-  llama-cpp-python>=0.2.0 \
-  TTS>=0.22.0 \
-  ultralytics>=8.0.0 \
-  pydub>=0.25.1
+# Rebecca's Brain (GGUF model inference)
+llama-cpp-python
 
+# Vision & Image Processing (Rebecca's eyes)
+pillow
+numpy
+opencv-python
+torch
+ultralytics
 
+# Text-to-Speech (Rebecca's voice)
+# IMPORTANT: Newer versions break on Linux, use 6.1.9
+edge-tts==6.1.9
+soundfile
+
+# Dependencies that come with the above but just in case
+# (cause pip is stoopid sometimes)
+typing-extensions
+requests
