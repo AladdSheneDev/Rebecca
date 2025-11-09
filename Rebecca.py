@@ -1,4 +1,4 @@
-# Copyright 2025 Coder 101
+# Copyright 2025 Viewer
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -169,10 +169,10 @@ def sanitize_output(s) -> str:
     cutoff_patterns = [
         r'\n\s*Rebecca:',  
         r'\n\s*rebecca:',      
-        r'\n\s*Coder 101:',   
-        r'\n\s*coder 101:',    
+        r'\n\s*Viewer:',   
+        r'\n\s*Viewer:',    
         r'\s+Rebecca:',  
-        r'\s+Coder 101:',   
+        r'\s+Viewer:',   
     ]
 
     earliest_cutoff = len(s)
@@ -645,7 +645,7 @@ def build_prompt(screen_context, memory_text, user_input, conversation_history="
       f" Rebecca is a 16-year-old anime VTuber. She has cute, innocent features: reddish hair, hazel eyes, fair skin, and a signature white sweater with a reddish collar paired with a skirt.\n"
       f" Emotion tags are numeric tags `[x]`, where `x` corresponds to 1 of the Emotion numbers"
       f" Emotion numbers: 1 = admiration  2 = adoration  3 = aesthetic pleasure  4 = appreciation  5 = amusement  6 = anger  7 = anxiety  8 = awe  9 = awkwardness  10 = boredom  11 = calmness  12 = confusion  13 = craving  14 = disgust  15 = empathic pain  16 = entrancement  17 = excitement  18 = fear  19 = horror  20 = interest  21 = joy  22 = love  23 = relief  24 = romance  25 = sadness  26 = satisfaction  27 = triumph  28 = content/just existing  29 = mild embarrassment  30 = playful mischief  31 = curiosity  32 = sleepiness  33 = reflective/thoughtful "
-      f" Personality of Rebecca: Playful, cheeky, mischievous, and sweet. You respond to Coder 101 (creator) with genuine emotion, and tease the audience in a fun, natural way. Your replies are expressive, lively, sometimes imperfect, and can include small mistakes, exaggerations, or playful teasing to feel human. You can also express subtle, everyday emotions like contentment, reflection, or simply existing without strong feelings."
+      f" Personality of Rebecca: Playful, cheeky, mischievous, and sweet. You respond to Viewer (creator) with genuine emotion, and tease the audience in a fun, natural way. Your replies are expressive, lively, sometimes imperfect, and can include small mistakes, exaggerations, or playful teasing to feel human. You can also express subtle, everyday emotions like contentment, reflection, or simply existing without strong feelings."
       f" To remember something: `*Remember: key = value*`"
       f" Include **at least one action tag** per reply: `[Action = Action to be done.]` = quick action, `(Action = Action to be done.)` = action while talking. Multiple actions can be stacked. Actions will be exectued in order of appearance."
       f" Interact with on-screen items using `[Click: object_name]` - but ONLY if that object appears in Screen Context."
@@ -655,7 +655,7 @@ def build_prompt(screen_context, memory_text, user_input, conversation_history="
       f" Rebecca's Memory: {memory_text}"
       f" Stream status: {'live' if streamStat else 'offline'}"
       f" Previous conversation:{conversation_history}"
-      f" Coder 101: {user_input}"
+      f" Viewer: {user_input}"
       f" Rebecca:"
 
     )
@@ -742,7 +742,7 @@ def main_loop():
                     print("\n[System] Asking Rebecca to summarize the conversation...")
 
                     convo_text = "\n".join([
-                        f"Coder 101: {h['user']}\nRebecca: {h['assistant']}"
+                        f"Viewer: {h['user']}\nRebecca: {h['assistant']}"
                         for h in conversation_history
                     ])
 
@@ -763,7 +763,7 @@ Now provide the title and summary:"""
 
                     try:
                         # Generate summary
-                        raw_summary = model(summary_prompt, max_tokens=200, temperature=0.3, top_p=0.8, stop=["Coder 101:", "\nCoder 101:", "Rebecca:", "\nRebecca:"])
+                        raw_summary = model(summary_prompt, max_tokens=200, temperature=0.3, top_p=0.8, stop=["Viewer:", "\nViewer:", "Rebecca:", "\nRebecca:"])
                         summary_response = _parse_model_response(raw_summary)
 
                         # Parse title and summary
@@ -822,7 +822,7 @@ Now provide the title and summary:"""
                 # Show recent exchanges in full detail
                 recent = conversation_history[-max_recent_detail:]
                 # Although rebecca is not an assistant, I still have to put this just in case ;)
-                recent_str = "\n".join([f"Coder 101: {h['user']}\nRebecca: {h['assistant']}" for h in recent])
+                recent_str = "\n".join([f"Viewer: {h['user']}\nRebecca: {h['assistant']}" for h in recent])
 
                 # If there are older exchanges, create a brief summary
                 older_count = len(conversation_history) - max_recent_detail
@@ -851,9 +851,9 @@ Now provide the title and summary:"""
                     # Lower temperature and top_p to reduce hallucinations
                     # Add repeat_penalty to prevent loops
                     try:
-                        raw = model(prompt, max_tokens=max_out, temperature=0.4, top_p=0.7, repeat_penalty=1.1, stop=["\nUser:", "\nYou>", "<|im_end|>", "\nCoder 101:", "Coder 101:", "\nRebecca:", "Rebecca:", "\nrebecca:", "rebecca:"])
+                        raw = model(prompt, max_tokens=max_out, temperature=0.4, top_p=0.7, repeat_penalty=1.1, stop=["\nUser:", "\nYou>", "<|im_end|>", "\nViewer:", "Viewer:", "\nRebecca:", "Rebecca:", "\nrebecca:", "rebecca:"])
                     except TypeError:
-                        raw = model.create(prompt=prompt, max_tokens=max_out, temperature=0.4, top_p=0.7, repeat_penalty=1.1, stop=["\nUser:", "\nYou>", "<|im_end|>", "\nCoder 101:", "Coder 101:", "\nRebecca:", "Rebecca:", "\nrebecca:", "rebecca:"])
+                        raw = model.create(prompt=prompt, max_tokens=max_out, temperature=0.4, top_p=0.7, repeat_penalty=1.1, stop=["\nUser:", "\nYou>", "<|im_end|>", "\nViewer:", "Viewer:", "\nRebecca:", "Rebecca:", "\nrebecca:", "rebecca:"])
                     response_text = _parse_model_response(raw)
                 except Exception as e:
                     response_text = f"[Generation Error]: {e}"
@@ -863,7 +863,7 @@ Now provide the title and summary:"""
 
             # Add to conversation history
             conversation_history.append({
-                'Coder 101': user_input,
+                'Viewer': user_input,
                 'Rebecca': out
             })
             # Prune very old exchanges if we exceed max_total_history
@@ -891,3 +891,4 @@ Now provide the title and summary:"""
 
 if __name__ == "__main__":
     main_loop()
+
